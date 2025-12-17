@@ -20,7 +20,9 @@ public class VotingService {
     private final TcpServerService tcpServer;
     private final Map<Integer, SatelliteData> satelliteDataMap = new ConcurrentHashMap<>();
     private final Map<Integer, Double> satelliteWeights = new ConcurrentHashMap<>();
+    private final Map<Integer, Integer> errorCounters = new ConcurrentHashMap<>();
 
+    private static final int MAX_ERRORS_TOLERANCE = 3;
     private volatile long calculatedSystemTime = 0;
     private volatile long lastCalculationTime = 0;
     private volatile int activeResponseCount = 0;
@@ -36,6 +38,7 @@ public class VotingService {
     private void initializeWeights() {
         for (int i = 1; i <= 8; i++) {
             satelliteWeights.put(i, 1.0);
+            errorCounters.put(i, 0);
         }
     }
 
@@ -43,7 +46,7 @@ public class VotingService {
      * Scheduled task: Poll all satellites for time and calculate weighted average
      * Runs every 3 seconds
      */
-    @Scheduled(fixedRate = 5000, initialDelay = 1000)
+    @Scheduled(fixedRate = 3000, initialDelay = 1000)
     public void pollSatellitesAndCalculate() {
         try {
             Request timeRequest = new Request(RequestType.GET_TIME, null);
@@ -66,7 +69,7 @@ public class VotingService {
                     Response response = future.getNow(null);
 
                     if (response == null) {
-                        throw new Exception("Timeout - brak odpowiedzi");
+                        throw new Exception("Timeout");
                     }
 
                     responses.add(response);
@@ -74,13 +77,12 @@ public class VotingService {
                     SatelliteData data = satelliteDataMap.computeIfAbsent(id, k -> new SatelliteData(id));
                     data.setLastResponse(response);
                     data.setLastSeen(System.currentTimeMillis());
+
+                    errorCounters.put(id, 0);
                     data.setConnected(true);
 
                 } catch (Exception e) {
-                    SatelliteData data = satelliteDataMap.get(id);
-                    if (data != null) {
-                        data.setConnected(false);
-                    }
+                    handleCommunicationError(id);
                 }
             });
 
@@ -101,6 +103,23 @@ public class VotingService {
 
         } catch (Exception e) {
             System.err.println("[Voting] Error: " + e.getMessage());
+        }
+    }
+
+    private void handleCommunicationError(int id) {
+        SatelliteData data = satelliteDataMap.get(id);
+        if (data == null) return;
+
+        int currentErrors = errorCounters.getOrDefault(id, 0) + 1;
+        errorCounters.put(id, currentErrors);
+
+        if (currentErrors >= MAX_ERRORS_TOLERANCE) {
+            if (data.isConnected()) {
+                System.out.println("[Voting] Satellite " + id + " marked as DISCONNECTED after " + currentErrors + " failures.");
+            }
+            data.setConnected(false);
+        } else {
+            System.out.println("[Voting] Satellite " + id + " missed a beat (" + currentErrors + "/" + MAX_ERRORS_TOLERANCE + ")");
         }
     }
 
@@ -169,9 +188,7 @@ public class VotingService {
         for (int id = 1; id <= 8; id++) {
             SatelliteData data = satelliteDataMap.get(id);
 
-            boolean socketOpen = tcpServer.isConnected(id);
-            boolean appConnected = (data != null && data.isConnected());
-            boolean isAlive = socketOpen && appConnected;
+            boolean isAlive = (data != null && data.isConnected());
 
             if (data != null && data.getLastResponse() != null) {
                 states.add(new SatelliteState(
@@ -189,7 +206,7 @@ public class VotingService {
                         0,
                         ResponseStatus.ERROR,
                         satelliteWeights.getOrDefault(id, 1.0),
-                        isAlive // <-- Używamy nowej zmiennej
+                        isAlive
                 ));
             }
         }
@@ -230,6 +247,7 @@ public class VotingService {
      * Reset all errors for a satellite
      */
     public CompletableFuture<Response> resetSatelliteErrors(int satelliteId) {
+        errorCounters.put(satelliteId, 0);
         Request request = new Request(RequestType.RESET_ERRORS, null);
         return tcpServer.sendRequest(satelliteId, request);
     }

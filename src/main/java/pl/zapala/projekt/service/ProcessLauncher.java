@@ -1,7 +1,8 @@
 package pl.zapala.projekt.service;
 
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -25,12 +26,14 @@ public class ProcessLauncher {
     private final List<Process> satelliteProcesses = new ArrayList<>();
     private boolean autoLaunch = true; // Set to false to disable auto-launch
 
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent.class)
     public void launchSatellites() {
         if (!autoLaunch) {
             System.out.println("[ProcessLauncher] Auto-launch disabled");
             return;
         }
+
+        try { Thread.sleep(1000); } catch (InterruptedException e) {}
 
         System.out.println("[ProcessLauncher] Starting " + SATELLITE_COUNT + " satellite processes...");
 

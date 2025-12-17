@@ -216,7 +216,7 @@ public class DashboardView extends VerticalLayout {
     private void showErrorInjectionDialog(int satelliteId, RequestType errorType) {
         Dialog dialog = new Dialog();
         String title = errorType == RequestType.INJECT_TIME_OFFSET ? "Przesunięcie czasu" : "Opóźnienie sieci";
-        dialog.setHeaderTitle(title + " (ID: " + satelliteId + ")");
+        dialog.setHeaderTitle(title + " " + satelliteId + "");
 
         NumberField valueField = new NumberField("Wartość (ms)");
         valueField.setValue(1000.0);
@@ -247,7 +247,7 @@ public class DashboardView extends VerticalLayout {
     private void injectCrash(int satelliteId) {
         votingService.injectError(satelliteId, RequestType.INJECT_CRASH, null)
                 .thenAccept(response -> getUI().ifPresent(ui -> ui.access(() -> {
-                    showNotification("Awaria satelity " + satelliteId + "!", NotificationVariant.LUMO_ERROR);
+                    showNotification("Awaria satelity " + satelliteId, NotificationVariant.LUMO_ERROR);
                 })));
     }
 
@@ -282,8 +282,13 @@ public class DashboardView extends VerticalLayout {
         super.onAttach(attachEvent);
         UI ui = attachEvent.getUI();
 
-        ui.getPage().addStyleSheet("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&subset=latin,latin-ext&display=swap");
-        getStyle().set("font-family", "'Inter', sans-serif");
+        ui.getPage().addStyleSheet(
+                "https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap"
+        );
+
+        ui.getPage().executeJs(
+                "document.documentElement.style.setProperty('--lumo-font-family', 'Poppins, sans-serif');"
+        );
 
         ui.setPollInterval(1000);
         ui.addPollListener(e -> updateUI());
