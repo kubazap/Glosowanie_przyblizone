@@ -9,12 +9,15 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Process Launcher - Automatically spawns 8 satellite client processes.
- * Each satellite runs as a separate JVM instance.
+ * Each satellite runs as a separate JVM instance with HIGH CPU priority.
  */
 @Component
 public class ProcessLauncher {
@@ -23,7 +26,12 @@ public class ProcessLauncher {
     private static final String SERVER_HOST = "localhost";
     private static final int SERVER_PORT = 9000;
 
+    private static final String PRIORITY_HIGH = "HIGH";
+    private static final String PRIORITY_REALTIME = "REALTIME";
+    private static final String PRIORITY_ABOVE_NORMAL = "ABOVENORMAL";
+
     private final List<Process> satelliteProcesses = new ArrayList<>();
+    private final List<Path> tempClasspathFiles = new ArrayList<>();
     private boolean autoLaunch = true; // Set to false to disable auto-launch
 
     @EventListener(ApplicationReadyEvent.class)
@@ -35,7 +43,7 @@ public class ProcessLauncher {
 
         try { Thread.sleep(1000); } catch (InterruptedException e) {}
 
-        System.out.println("[ProcessLauncher] Starting " + SATELLITE_COUNT + " satellite processes...");
+        System.out.println("[ProcessLauncher] Starting " + SATELLITE_COUNT + " satellite processes with HIGH priority...");
 
         // Delay to ensure TCP server is ready
         try {
@@ -49,15 +57,15 @@ public class ProcessLauncher {
             try {
                 Process process = launchSatellite(i);
                 satelliteProcesses.add(process);
-                System.out.println("[ProcessLauncher] Satellite-" + i + " launched (PID: " +
+                System.out.println("[ProcessLauncher] Satellite-" + i + " launched with HIGH priority (PID: " +
                         process.pid() + ")");
 
-                // Small delay between launches
                 Thread.sleep(500);
 
             } catch (Exception e) {
                 System.err.println("[ProcessLauncher] Failed to launch Satellite-" + i + ": " +
                         e.getMessage());
+                e.printStackTrace();
             }
         }
 
@@ -65,18 +73,109 @@ public class ProcessLauncher {
     }
 
     /**
-     * Launch a single satellite process
+     * Launch a single satellite process with HIGH CPU priority
      */
     private Process launchSatellite(int satelliteId) throws IOException {
+        String os = System.getProperty("os.name").toLowerCase();
+        ProcessBuilder builder;
+
+        if (os.contains("win")) {
+            builder = createWindowsProcessWithPriority(satelliteId);
+        } else {
+            builder = createUnixProcessWithPriority(satelliteId);
+        }
+
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+
+        try {
+            setPriorityAfterStart(process);
+        } catch (Exception e) {
+            System.err.println("[ProcessLauncher] Could not set priority after start: " + e.getMessage());
+        }
+
+        Thread outputThread = new Thread(() -> readProcessOutput(satelliteId, process));
+        outputThread.setDaemon(true);
+        outputThread.start();
+
+        return process;
+    }
+
+    /**
+     * Create Windows process with HIGH priority using classpath file
+     */
+    private ProcessBuilder createWindowsProcessWithPriority(int satelliteId) throws IOException {
         // Get Java home
+        String javaHome = System.getProperty("java.home");
+        String javaBin = javaHome + File.separator + "bin" + File.separator + "java.exe";
+
+        String classpath = System.getProperty("java.class.path");
+
+        Path classpathFile = createClasspathFile(classpath, satelliteId);
+        tempClasspathFiles.add(classpathFile);
+
+        List<String> command = new ArrayList<>();
+        command.add(javaBin);
+        command.add("-cp");
+        command.add("@" + classpathFile.toAbsolutePath().toString());
+        command.add("pl.zapala.projekt.satellite.SatelliteApp");
+        command.add(String.valueOf(satelliteId));
+        command.add(SERVER_HOST);
+        command.add(String.valueOf(SERVER_PORT));
+
+        System.out.println("[ProcessLauncher] Command for Satellite-" + satelliteId + ": " +
+                String.join(" ", command));
+
+        return new ProcessBuilder(command);
+    }
+
+    /**
+     * Create temporary classpath file
+     */
+    private Path createClasspathFile(String classpath, int satelliteId) throws IOException {
+        Path tempFile = Files.createTempFile("satellite-" + satelliteId + "-cp-", ".txt");
+
+        Files.writeString(tempFile, classpath);
+        tempFile.toFile().deleteOnExit();
+
+        return tempFile;
+    }
+
+    /**
+     * Set process priority AFTER it starts using wmic command
+     */
+    private void setPriorityAfterStart(Process process) {
+        try {
+            long pid = process.pid();
+            String os = System.getProperty("os.name").toLowerCase();
+
+            if (os.contains("win")) {
+                String priority = "128";
+
+                ProcessBuilder pb = new ProcessBuilder(
+                        "wmic", "process", "where", "ProcessId=" + pid,
+                        "CALL", "setpriority", priority
+                );
+                Process wmicProcess = pb.start();
+                wmicProcess.waitFor();
+
+                System.out.println("[ProcessLauncher] Set HIGH priority for PID: " + pid);
+            }
+        } catch (Exception e) {
+            System.err.println("[ProcessLauncher] Could not set priority: " + e.getMessage());
+        }
+    }
+
+    private ProcessBuilder createUnixProcessWithPriority(int satelliteId) {
         String javaHome = System.getProperty("java.home");
         String javaBin = javaHome + File.separator + "bin" + File.separator + "java";
 
-        // Get classpath from current JVM
         String classpath = System.getProperty("java.class.path");
 
-        // Build command
         List<String> command = new ArrayList<>();
+        command.add("nice");
+        command.add("-n");
+        command.add("-10");
         command.add(javaBin);
         command.add("-cp");
         command.add(classpath);
@@ -85,19 +184,7 @@ public class ProcessLauncher {
         command.add(SERVER_HOST);
         command.add(String.valueOf(SERVER_PORT));
 
-        // Create process builder
-        ProcessBuilder builder = new ProcessBuilder(command);
-        builder.redirectErrorStream(true);
-
-        // Start process
-        Process process = builder.start();
-
-        // Start thread to read process output
-        Thread outputThread = new Thread(() -> readProcessOutput(satelliteId, process));
-        outputThread.setDaemon(true);
-        outputThread.start();
-
-        return process;
+        return new ProcessBuilder(command);
     }
 
     /**
@@ -143,6 +230,17 @@ public class ProcessLauncher {
         }
 
         satelliteProcesses.clear();
+
+        // Clean up temporary classpath files
+        for (Path tempFile : tempClasspathFiles) {
+            try {
+                Files.deleteIfExists(tempFile);
+            } catch (IOException e) {
+                // Ignore cleanup errors
+            }
+        }
+        tempClasspathFiles.clear();
+
         System.out.println("[ProcessLauncher] All satellite processes terminated");
     }
 
