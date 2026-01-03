@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Satellite Client Application - Runs as a separate process.
+ * Satellite Client Application with error handling and Watchdog Timer.
  * Simulates a clock with configurable errors (offset, delay, crash).
  */
 public class SatelliteApp {
@@ -22,7 +22,12 @@ public class SatelliteApp {
 
     // Error simulation state
     private final AtomicLong timeOffset = new AtomicLong(0);
+    private final AtomicLong networkDelay = new AtomicLong(0);
     private final AtomicBoolean crashed = new AtomicBoolean(false);
+
+    // Watchdog monitoring
+    private final AtomicLong lastFeedTime = new AtomicLong(System.currentTimeMillis());
+    private static final long WATCHDOG_TIMEOUT = 10000; // 10 seconds
 
     // Base clock drift simulation (±10ms random drift)
     private final Random random = new Random();
@@ -58,7 +63,9 @@ public class SatelliteApp {
      * Main run loop - connects to server and handles requests
      */
     public void run() {
-        System.out.println("[Satellite-" + satelliteId + "] Starting...");
+        System.out.println("[Satellite-" + satelliteId + "] Starting with Watchdog protection...");
+
+        startWatchdog();
 
         while (true) {
             try (Socket socket = new Socket(serverHost, serverPort);
@@ -67,7 +74,6 @@ public class SatelliteApp {
 
                 System.out.println("[Satellite-" + satelliteId + "] Connected to server");
 
-                // Send initial registration
                 Response registration = new Response(
                         satelliteId,
                         getCurrentTime(),
@@ -76,9 +82,10 @@ public class SatelliteApp {
                 );
                 out.println(objectMapper.writeValueAsString(registration));
 
-                // Handle incoming requests
+                // Main loop - handle incoming requests
                 String line;
                 while ((line = in.readLine()) != null) {
+                    feedWatchdog();
                     handleRequest(line, out);
                 }
 
@@ -86,7 +93,6 @@ public class SatelliteApp {
                 System.err.println("[Satellite-" + satelliteId + "] Connection error: " + e.getMessage());
             }
 
-            // Reconnect after delay if not crashed
             if (!crashed.get()) {
                 try {
                     Thread.sleep(5000);
@@ -103,15 +109,52 @@ public class SatelliteApp {
     }
 
     /**
-     * Handle a single request from the server
+     * Watchdog Timer - monitors main thread activity
+     */
+    private void startWatchdog() {
+        Thread watchdog = new Thread(() -> {
+            while (!crashed.get()) {
+                try {
+                    Thread.sleep(2000);
+
+                    long timeSinceLastFeed = System.currentTimeMillis() - lastFeedTime.get();
+
+                    if (timeSinceLastFeed > WATCHDOG_TIMEOUT) {
+                        System.err.println("[Satellite-" + satelliteId + "] WATCHDOG ALERT: Main thread unresponsive for "
+                                + timeSinceLastFeed + "ms!");
+                    }
+
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }, "Watchdog-" + satelliteId);
+
+        watchdog.setDaemon(true);
+        watchdog.start();
+    }
+
+    /**
+     * Feed watchdog - confirms main thread activity
+     */
+    private void feedWatchdog() {
+        lastFeedTime.set(System.currentTimeMillis());
+    }
+
+    /**
+     * Handle a single request from the server with error simulation
      */
     private void handleRequest(String requestJson, PrintWriter out) {
         try {
+            long delay = networkDelay.get();
+            if (delay > 0) {
+                Thread.sleep(delay);
+            }
+
             Request request = objectMapper.readValue(requestJson, Request.class);
 
-            // Check if crashed
             if (crashed.get() && request.getType() != RequestType.RESET_ERRORS) {
-                // No response when crashed
                 return;
             }
 
@@ -135,8 +178,12 @@ public class SatelliteApp {
                             ResponseStatus.CRASHED,
                             "Satellite crashed"
                     );
-                    System.out.println("[Satellite-" + satelliteId + "] CRASHED");
-                    break;
+                    System.out.println("[Satellite-" + satelliteId + "] CRASHED - simulating hardware failure");
+                    out.println(objectMapper.writeValueAsString(response));
+
+                    Thread.sleep(500);
+                    System.exit(0);
+                    return;
 
                 case INJECT_TIME_OFFSET:
                     long offset = request.getParameter() != null ? request.getParameter() : 0;
@@ -147,11 +194,24 @@ public class SatelliteApp {
                             ResponseStatus.OK,
                             "Time offset set to " + offset + "ms"
                     );
-                    System.out.println("[Satellite-" + satelliteId + "] Time offset injected: " + offset + "ms");
+                    System.out.println("[Satellite-" + satelliteId + "] Time offset: " + offset + "ms");
+                    break;
+
+                case INJECT_NETWORK_DELAY:
+                    long delayValue = request.getParameter() != null ? request.getParameter() : 0;
+                    networkDelay.set(delayValue);
+                    response = new Response(
+                            satelliteId,
+                            getCurrentTime(),
+                            ResponseStatus.OK,
+                            "Network delay set to " + delayValue + "ms"
+                    );
+                    System.out.println("[Satellite-" + satelliteId + "] Network delay: " + delayValue + "ms");
                     break;
 
                 case RESET_ERRORS:
                     timeOffset.set(0);
+                    networkDelay.set(0);
                     crashed.set(false);
                     response = new Response(
                             satelliteId,
@@ -159,7 +219,7 @@ public class SatelliteApp {
                             ResponseStatus.OK,
                             "All errors reset"
                     );
-                    System.out.println("[Satellite-" + satelliteId + "] Errors reset");
+                    System.out.println("[Satellite-" + satelliteId + "] All errors reset");
                     break;
 
                 case PING:
@@ -183,7 +243,7 @@ public class SatelliteApp {
             out.println(objectMapper.writeValueAsString(response));
 
         } catch (Exception e) {
-            System.err.println("[Satellite-" + satelliteId + "] Error handling request: " + e.getMessage());
+            System.err.println("[Satellite-" + satelliteId + "] Error: " + e.getMessage());
         }
     }
 

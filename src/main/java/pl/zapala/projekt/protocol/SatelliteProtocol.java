@@ -14,11 +14,12 @@ public class SatelliteProtocol {
      * Request types sent from Central Server to Satellites
      */
     public enum RequestType {
-        GET_TIME,           // Request current time from satellite
-        INJECT_CRASH,       // Simulate satellite crash
-        INJECT_TIME_OFFSET, // Inject time offset error
-        RESET_ERRORS,       // Reset all injected errors
-        PING               // Health check
+        GET_TIME,
+        INJECT_CRASH,
+        INJECT_TIME_OFFSET,
+        INJECT_NETWORK_DELAY,
+        RESET_ERRORS,
+        PING
     }
 
     /**

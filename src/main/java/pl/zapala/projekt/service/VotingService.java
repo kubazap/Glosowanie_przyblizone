@@ -1,17 +1,21 @@
 package pl.zapala.projekt.service;
 
-
+import pl.zapala.projekt.model.VotingHistoryEntry;
 import pl.zapala.projekt.protocol.SatelliteProtocol.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
  * Voting Service - Implements the weighted average time calculation algorithm.
+ * Includes observability metrics and automatic ban mechanism for outliers.
  * Periodically polls satellites and calculates the most probable system time.
  */
 @Service
@@ -22,10 +26,24 @@ public class VotingService {
     private final Map<Integer, Double> satelliteWeights = new ConcurrentHashMap<>();
     private final Map<Integer, Integer> errorCounters = new ConcurrentHashMap<>();
 
+    // Observability metrics (Thread-Safe)
+    private final AtomicInteger totalVotingRounds = new AtomicInteger(0);
+    private final AtomicInteger totalNetworkErrors = new AtomicInteger(0);
+    private final AtomicLong currentDeviation = new AtomicLong(0);
+
+    // Voting history (last 50 entries)
+    private final LinkedList<VotingHistoryEntry> votingHistory = new LinkedList<>();
+    private static final int MAX_HISTORY_SIZE = 50;
+
+    // Auto-ban threshold for time deviation
+    private static final long AUTO_BAN_DEVIATION_THRESHOLD = 5000; // 5 seconds
+
     private static final int MAX_ERRORS_TOLERANCE = 3;
     private volatile long calculatedSystemTime = 0;
     private volatile long lastCalculationTime = 0;
     private volatile int activeResponseCount = 0;
+
+    private final SimpleDateFormat timeFormatter = new SimpleDateFormat("HH:mm:ss.SSS");
 
     public VotingService(TcpServerService tcpServer) {
         this.tcpServer = tcpServer;
@@ -43,12 +61,14 @@ public class VotingService {
     }
 
     /**
-     * Scheduled task: Poll all satellites for time and calculate weighted average
-     * Runs every 3 seconds
+     * Scheduled task: Poll all satellites for time and calculate weighted average.
+     * Runs every 3 seconds with metrics collection and auto-ban mechanism.
      */
     @Scheduled(fixedRate = 3000, initialDelay = 1000)
     public void pollSatellitesAndCalculate() {
         try {
+            totalVotingRounds.incrementAndGet();
+
             Request timeRequest = new Request(RequestType.GET_TIME, null);
             Map<Integer, CompletableFuture<Response>> futures = tcpServer.broadcastRequest(timeRequest);
 
@@ -78,10 +98,23 @@ public class VotingService {
                     data.setLastResponse(response);
                     data.setLastSeen(System.currentTimeMillis());
 
+                    // Auto-ban: Check time deviation
+                    long satelliteDeviation = Math.abs(response.getTimestamp() - System.currentTimeMillis());
+                    if (satelliteDeviation > AUTO_BAN_DEVIATION_THRESHOLD) {
+                        double currentWeight = satelliteWeights.get(id);
+                        if (currentWeight > 0) {
+                            satelliteWeights.put(id, 0.0);
+                            System.out.println("[Voting] AUTO-BAN: Satellite-" + id +
+                                    " deviation=" + satelliteDeviation + "ms > threshold=" +
+                                    AUTO_BAN_DEVIATION_THRESHOLD + "ms. Weight set to 0.0");
+                        }
+                    }
+
                     errorCounters.put(id, 0);
                     data.setConnected(true);
 
                 } catch (Exception e) {
+                    totalNetworkErrors.incrementAndGet();
                     handleCommunicationError(id);
                 }
             });
@@ -97,15 +130,45 @@ public class VotingService {
             lastCalculationTime = System.currentTimeMillis();
 
             long deviation = calculatedSystemTime - lastCalculationTime;
+            currentDeviation.set(deviation);
 
-            System.out.printf("[Voting] System Time: %d | Deviation: %+d ms | Active: %d/%d%n",
-                    calculatedSystemTime, deviation, activeResponseCount, satelliteWeights.size());
+            addToHistory(new VotingHistoryEntry(
+                    timeFormatter.format(new Date(calculatedSystemTime)),
+                    calculatedSystemTime,
+                    activeResponseCount,
+                    deviation
+            ));
+
+            System.out.printf("[Voting] Round: %d | System Time: %d | Deviation: %+d ms | Active: %d/8 | Network Errors: %d%n",
+                    totalVotingRounds.get(), calculatedSystemTime, deviation,
+                    activeResponseCount, totalNetworkErrors.get());
 
         } catch (Exception e) {
             System.err.println("[Voting] Error: " + e.getMessage());
+            totalNetworkErrors.incrementAndGet();
         }
     }
 
+    /**
+     * Add entry to voting history (FIFO, max 50 entries)
+     */
+    private synchronized void addToHistory(VotingHistoryEntry entry) {
+        if (votingHistory.size() >= MAX_HISTORY_SIZE) {
+            votingHistory.removeFirst();
+        }
+        votingHistory.addLast(entry);
+    }
+
+    /**
+     * Get voting history (copy for thread safety)
+     */
+    public synchronized List<VotingHistoryEntry> getVotingHistory() {
+        return new ArrayList<>(votingHistory);
+    }
+
+    /**
+     * Handle communication error with satellite
+     */
     private void handleCommunicationError(int id) {
         SatelliteData data = satelliteDataMap.get(id);
         if (data == null) return;
@@ -115,11 +178,10 @@ public class VotingService {
 
         if (currentErrors >= MAX_ERRORS_TOLERANCE) {
             if (data.isConnected()) {
-                System.out.println("[Voting] Satellite " + id + " marked as DISCONNECTED after " + currentErrors + " failures.");
+                System.out.println("[Voting] Satellite " + id + " marked as DISCONNECTED after " +
+                        currentErrors + " failures.");
             }
             data.setConnected(false);
-        } else {
-            System.out.println("[Voting] Satellite " + id + " missed a beat (" + currentErrors + "/" + MAX_ERRORS_TOLERANCE + ")");
         }
     }
 
@@ -131,7 +193,6 @@ public class VotingService {
             return System.currentTimeMillis();
         }
 
-        // Filter only OK responses
         List<Response> validResponses = responses.stream()
                 .filter(r -> r.getStatus() == ResponseStatus.OK)
                 .collect(Collectors.toList());
@@ -140,7 +201,6 @@ public class VotingService {
             return System.currentTimeMillis();
         }
 
-        // Calculate weighted average
         double totalWeight = 0.0;
         double weightedSum = 0.0;
 
@@ -151,7 +211,6 @@ public class VotingService {
         }
 
         if (totalWeight == 0) {
-            // Fallback to simple average
             return (long) validResponses.stream()
                     .mapToLong(Response::getTimestamp)
                     .average()
@@ -159,6 +218,18 @@ public class VotingService {
         }
 
         return Math.round(weightedSum / totalWeight);
+    }
+
+    public int getTotalVotingRounds() {
+        return totalVotingRounds.get();
+    }
+
+    public int getTotalNetworkErrors() {
+        return totalNetworkErrors.get();
+    }
+
+    public long getCurrentDeviation() {
+        return currentDeviation.get();
     }
 
     /**
@@ -187,7 +258,6 @@ public class VotingService {
 
         for (int id = 1; id <= 8; id++) {
             SatelliteData data = satelliteDataMap.get(id);
-
             boolean isAlive = (data != null && data.isConnected());
 
             if (data != null && data.getLastResponse() != null) {
@@ -248,6 +318,9 @@ public class VotingService {
      */
     public CompletableFuture<Response> resetSatelliteErrors(int satelliteId) {
         errorCounters.put(satelliteId, 0);
+
+        satelliteWeights.put(satelliteId, 1.0);
+
         Request request = new Request(RequestType.RESET_ERRORS, null);
         return tcpServer.sendRequest(satelliteId, request);
     }
