@@ -133,14 +133,14 @@ public class DashboardView extends VerticalLayout {
         satelliteSection.add(satelliteGrid);
         wrapper.add(satelliteSection);
 
-        // MIDDLE SECTION: Voting History
+        // MIDDLE SECTION: Strategy Cards
+        wrapper.add(createModernStrategySection());
+
+        // BOTTOM SECTION: Voting History
         VerticalLayout historySection = createSectionContainer("Historia Głosowań");
         historyGrid = createHistoryGrid();
         historySection.add(historyGrid);
         wrapper.add(historySection);
-
-        // BOTTOM SECTION: Strategy Cards
-        wrapper.add(createModernStrategySection());
 
         add(wrapper);
     }
