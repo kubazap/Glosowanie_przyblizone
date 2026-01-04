@@ -1,6 +1,6 @@
 # System Głosowania Przybliżonego Czasu
 
-System rozproszony do synchronizacji czasu oparty na algorytmie głosowania ważonego. Symuluje infrastrukturę 8 satelitów komunikujących się z serwerem centralnym przez TCP, z możliwością wstrzykiwania błędów i monitorowania w czasie rzeczywistym.
+System rozproszony do synchronizacji czasu z trzema algorytmami obliczania czasu: Średnia Ważona, Mediana oraz Byzantine Fault Tolerance. Symuluje infrastrukturę 8 satelitów komunikujących się z serwerem centralnym przez TCP, z możliwością wstrzykiwania błędów i monitorowania w czasie rzeczywistym.
 
 ![Dashboard Aplikacji](assets/app.png)
 
@@ -23,7 +23,8 @@ src/main/java/pl/zapala/projekt/
 ├── service/
 │   ├── ProcessLauncher.java         # Launcher satelitów
 │   ├── TcpServerService.java        # Serwer TCP
-│   └── VotingService.java           # Logika głosowania
+│   ├── VotingService.java           # Logika głosowania
+│   └── TimeCalculationStrategy.java # Strategie obliczania 
 │
 └── view/
     └── DashboardView.java           # Interfejs użytkownika
@@ -63,6 +64,14 @@ Tabela ostatnich 50 cykli głosowania z informacjami:
 - Czas systemowy (HH:mm:ss.SSS)
 - Liczba aktywnych satelitów
 - Odchylenie od czasu rzeczywistego
+
+### Panel wyboru strategii
+
+Sekcja na dole dashboardu umożliwia:
+
+- Przełączanie między trzema strategiami w czasie rzeczywistym
+- Wyświetlanie aktualnie aktywnej strategii
+- Opis działania każdej strategii
 
 ## Technologie
 
