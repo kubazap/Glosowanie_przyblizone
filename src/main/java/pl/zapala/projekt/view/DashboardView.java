@@ -21,6 +21,7 @@ import com.vaadin.flow.router.Route;
 import pl.zapala.projekt.model.VotingHistoryEntry;
 import pl.zapala.projekt.protocol.SatelliteProtocol.*;
 import pl.zapala.projekt.service.VotingService;
+import pl.zapala.projekt.service.VotingService.StrategyType;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -29,7 +30,8 @@ import java.util.Locale;
 
 /**
  * Main dashboard view for the Distributed Time Voting System.
- * Displays real-time system metrics, satellite control panel, topology visualization, and voting history.
+ * Displays real-time system metrics, satellite control panel, topology visualization,
+ * voting history, and strategy selection.
  */
 @Route("")
 @PageTitle("System Głosowania Przybliżonego Czasu")
@@ -43,6 +45,10 @@ public class DashboardView extends VerticalLayout {
     private final H2 activeCountValue = new H2("0 / 8");
 
     private final Div topologyCanvas = new Div();
+
+    private Div strategyCard1;
+    private Div strategyCard2;
+    private Div strategyCard3;
 
     public DashboardView(VotingService votingService) {
         this.votingService = votingService;
@@ -127,13 +133,235 @@ public class DashboardView extends VerticalLayout {
         satelliteSection.add(satelliteGrid);
         wrapper.add(satelliteSection);
 
-        // BOTTOM SECTION: Voting History
+        // MIDDLE SECTION: Voting History
         VerticalLayout historySection = createSectionContainer("Historia Głosowań");
         historyGrid = createHistoryGrid();
         historySection.add(historyGrid);
         wrapper.add(historySection);
 
+        // BOTTOM SECTION: Strategy Cards
+        wrapper.add(createModernStrategySection());
+
         add(wrapper);
+    }
+
+    /**
+     * Create modern strategy selection section with cards
+     */
+    private VerticalLayout createModernStrategySection() {
+        VerticalLayout section = createSectionContainer("Strategia Obliczania Czasu");
+
+        HorizontalLayout cardsContainer = new HorizontalLayout();
+        cardsContainer.setWidthFull();
+        cardsContainer.setSpacing(true);
+
+        strategyCard1 = createStrategyCard(
+                StrategyType.WEIGHTED_AVERAGE,
+                "Średnia Ważona",
+                "Oblicza czas na podstawie wag satelitów. Satelity o wyższej wadze mają większy wpływ na wynik.",
+                VaadinIcon.SCALE,
+                "var(--lumo-primary-color)"
+        );
+
+        strategyCard2 = createStrategyCard(
+                StrategyType.MEDIAN,
+                "Mediana",
+                "Wybiera medianę z czasów satelitów. Odporna na skrajne wartości odstające.",
+                VaadinIcon.CHART_LINE,
+                "var(--lumo-success-color)"
+        );
+
+        strategyCard3 = createStrategyCard(
+                StrategyType.BYZANTINE_FAULT_TOLERANCE,
+                "Byzantine Fault Tolerance",
+                "Odrzuca wartości odstające (>2σ) i uśrednia pozostałe. Wysoka odporność na awarie bizantyjskie.",
+                VaadinIcon.SHIELD,
+                "var(--lumo-error-color)"
+        );
+
+        cardsContainer.add(strategyCard1, strategyCard2, strategyCard3);
+
+        section.add(cardsContainer);
+
+        return section;
+    }
+
+    /**
+     * Create strategy card
+     */
+    private Div createStrategyCard(StrategyType type, String name, String description,
+                                   VaadinIcon icon, String accentColor) {
+
+        boolean isActive = votingService.getCurrentStrategyType() == type;
+
+        Div card = new Div();
+        card.getElement().setProperty("strategyType", type.name());
+
+        card.getStyle()
+                .set("flex", "1")
+                .set("border-radius", "var(--lumo-border-radius-l)")
+                .set("padding", "1.5rem")
+                .set("cursor", "pointer")
+                .set("transition", "all 0.2s ease")
+                .set("min-height", "200px")
+                .set("display", "flex")
+                .set("flex-direction", "column")
+                .set("background", isActive ? "var(--lumo-primary-color-10pct)" : "var(--lumo-base-color)")
+                .set("border", isActive ? "2px solid " + accentColor : "2px solid var(--lumo-contrast-10pct)")
+                .set("box-shadow", isActive ? "0 4px 8px rgba(0,0,0,0.12)" : "0 2px 4px rgba(0,0,0,0.08)");
+
+        Div iconContainer = new Div();
+        iconContainer.getElement().setProperty("iconContainer", "true");
+        iconContainer.getStyle()
+                .set("width", "48px")
+                .set("height", "48px")
+                .set("border-radius", "var(--lumo-border-radius-m)")
+                .set("display", "flex")
+                .set("align-items", "center")
+                .set("justify-content", "center")
+                .set("margin-bottom", "1rem")
+                .set("transition", "all 0.2s ease")
+                .set("background", isActive ? accentColor : "var(--lumo-contrast-10pct)");
+
+        Icon cardIcon = icon.create();
+        cardIcon.getElement().setProperty("cardIcon", "true");
+        cardIcon.setSize("24px");
+        cardIcon.setColor(isActive ? "white" : "var(--lumo-secondary-text-color)");
+
+        iconContainer.add(cardIcon);
+
+        // Title
+        H4 title = new H4(name);
+        title.getStyle()
+                .set("margin", "0 0 0.5rem 0")
+                .set("color", "var(--lumo-body-text-color)")
+                .set("font-size", "1rem")
+                .set("font-weight", "600");
+
+        // Description
+        Span desc = new Span(description);
+        desc.getStyle()
+                .set("color", "var(--lumo-secondary-text-color)")
+                .set("font-size", "0.875rem")
+                .set("line-height", "1.5")
+                .set("flex", "1");
+
+        // Active indicator
+        Div activeIndicator = new Div();
+        activeIndicator.getElement().setProperty("activeIndicator", "true");
+        activeIndicator.getStyle()
+                .set("display", isActive ? "flex" : "none")
+                .set("align-items", "center")
+                .set("gap", "0.5rem")
+                .set("margin-top", "1rem")
+                .set("padding-top", "1rem")
+                .set("border-top", "1px solid var(--lumo-contrast-10pct)");
+
+        Icon checkIcon = VaadinIcon.CHECK_CIRCLE.create();
+        checkIcon.setSize("16px");
+        checkIcon.setColor(accentColor);
+
+        Span activeText = new Span("Aktywna");
+        activeText.getStyle()
+                .set("color", accentColor)
+                .set("font-size", "0.75rem")
+                .set("font-weight", "600");
+
+        activeIndicator.add(checkIcon, activeText);
+        card.add(iconContainer, title, desc, activeIndicator);
+
+        // Click handler to change strategy
+        card.getElement().addEventListener("click", e -> {
+            votingService.setStrategy(type);
+            showNotification("Strategia zmieniona na: " + name, NotificationVariant.LUMO_SUCCESS);
+            updateStrategyCards();
+        });
+
+        card.getElement().addEventListener("mouseenter", e -> {
+            boolean currentlyActive = votingService.getCurrentStrategyType() == type;
+            if (!currentlyActive) {
+                card.getStyle()
+                        .set("transform", "translateY(-2px)")
+                        .set("box-shadow", "0 4px 12px rgba(0,0,0,0.12)")
+                        .set("border-color", "var(--lumo-contrast-20pct)");
+                iconContainer.getStyle().set("background", accentColor);
+                cardIcon.setColor("white");
+            }
+        });
+
+        card.getElement().addEventListener("mouseleave", e -> {
+            boolean currentlyActive = votingService.getCurrentStrategyType() == type;
+            if (!currentlyActive) {
+                card.getStyle()
+                        .set("transform", "translateY(0)")
+                        .set("box-shadow", "0 2px 4px rgba(0,0,0,0.08)")
+                        .set("border-color", "var(--lumo-contrast-10pct)");
+                iconContainer.getStyle().set("background", "var(--lumo-contrast-10pct)");
+                cardIcon.setColor("var(--lumo-secondary-text-color)");
+            }
+        });
+
+        return card;
+    }
+
+    /**
+     * Update all strategy cards to reflect current selection
+     */
+    private void updateStrategyCards() {
+        getUI().ifPresent(ui -> ui.access(() -> {
+            updateSingleStrategyCard(strategyCard1, StrategyType.WEIGHTED_AVERAGE, "var(--lumo-primary-color)");
+            updateSingleStrategyCard(strategyCard2, StrategyType.MEDIAN, "var(--lumo-success-color)");
+            updateSingleStrategyCard(strategyCard3, StrategyType.BYZANTINE_FAULT_TOLERANCE, "var(--lumo-error-color)");
+        }));
+    }
+
+    /**
+     * Update a single strategy card appearance
+     */
+    private void updateSingleStrategyCard(Div card, StrategyType type, String accentColor) {
+        boolean isActive = votingService.getCurrentStrategyType() == type;
+
+        if (isActive) {
+            card.getStyle()
+                    .set("border-color", accentColor)
+                    .set("background", "var(--lumo-primary-color-10pct)")
+                    .set("box-shadow", "0 4px 8px rgba(0,0,0,0.12)");
+        } else {
+            card.getStyle()
+                    .set("border-color", "var(--lumo-contrast-10pct)")
+                    .set("background", "var(--lumo-base-color)")
+                    .set("box-shadow", "0 2px 4px rgba(0,0,0,0.08)");
+        }
+
+        card.getChildren()
+                .filter(child -> child.getElement().getProperty("iconContainer") != null)
+                .findFirst()
+                .ifPresent(iconContainer -> {
+                    if (isActive) {
+                        iconContainer.getElement().getStyle().set("background", accentColor);
+                        iconContainer.getChildren()
+                                .filter(child -> child.getElement().getProperty("cardIcon") != null)
+                                .findFirst()
+                                .ifPresent(icon -> ((Icon) icon).setColor("white"));
+                    } else {
+                        iconContainer.getElement().getStyle().set("background", "var(--lumo-contrast-10pct)");
+                        iconContainer.getChildren()
+                                .filter(child -> child.getElement().getProperty("cardIcon") != null)
+                                .findFirst()
+                                .ifPresent(icon -> ((Icon) icon).setColor("var(--lumo-secondary-text-color)"));
+                    }
+                });
+
+        card.getChildren()
+                .filter(child -> child.getElement().getProperty("activeIndicator") != null)
+                .findFirst()
+                .ifPresent(indicator -> {
+                    if (isActive) {
+                        indicator.getElement().getStyle().set("display", "flex");
+                    } else {
+                        indicator.getElement().getStyle().set("display", "none");
+                    }
+                });
     }
 
     /**
@@ -206,23 +434,19 @@ public class DashboardView extends VerticalLayout {
         topologyCanvas.removeAll();
 
         int n = states.size();
-
         double cx = 50.0;
         double cy = 50.0;
         double radius = 35.0;
 
         StringBuilder svgContent = new StringBuilder();
-
         svgContent.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none' ")
                 .append("style='width: 100%; height: 100%; display: block;'>");
 
         for (int i = 0; i < n; i++) {
             SatelliteState state = states.get(i);
-
             double angle = 2 * Math.PI * i / n - Math.PI / 2;
             double sx = cx + radius * Math.cos(angle);
             double sy = cy + radius * Math.sin(angle);
-
             String color = resolveSvgColor(state);
 
             svgContent.append(String.format(Locale.US,
@@ -262,7 +486,6 @@ public class DashboardView extends VerticalLayout {
 
         for (int i = 0; i < n; i++) {
             SatelliteState state = states.get(i);
-
             double angle = 2 * Math.PI * i / n - Math.PI / 2;
             double sx = cx + radius * Math.cos(angle);
             double sy = cy + radius * Math.sin(angle);
@@ -394,12 +617,6 @@ public class DashboardView extends VerticalLayout {
         Grid<VotingHistoryEntry> grid = new Grid<>();
         grid.addThemeVariants(GridVariant.LUMO_ROW_STRIPES, GridVariant.LUMO_NO_BORDER);
         grid.setHeight("300px");
-
-        grid.getElement().executeJs(
-                "this.style.setProperty('--_lumo-grid-border-width', '0px');" +
-                        "const cells = this.shadowRoot.querySelectorAll('td');" +
-                        "cells.forEach(cell => { cell.style.padding = '1rem 0.5rem'; });"
-        );
 
         grid.addColumn(VotingHistoryEntry::timeString)
                 .setHeader("Czas Systemowy")

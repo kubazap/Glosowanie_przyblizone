@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
- * Voting Service - Implements the weighted average time calculation algorithm.
+ * Voting Service - Implements multiple time calculation algorithms.
+ * Supports three strategies: Weighted Average, Median, and Byzantine Fault Tolerance.
  * Includes observability metrics and automatic ban mechanism for outliers.
  * Periodically polls satellites and calculates the most probable system time.
  */
@@ -37,17 +38,78 @@ public class VotingService {
 
     // Auto-ban threshold for time deviation
     private static final long AUTO_BAN_DEVIATION_THRESHOLD = 5000; // 5 seconds
-
     private static final int MAX_ERRORS_TOLERANCE = 3;
+
     private volatile long calculatedSystemTime = 0;
     private volatile long lastCalculationTime = 0;
     private volatile int activeResponseCount = 0;
 
     private final SimpleDateFormat timeFormatter = new SimpleDateFormat("HH:mm:ss.SSS");
 
+    /**
+     * Available calculation strategies
+     */
+    public enum StrategyType {
+        WEIGHTED_AVERAGE,
+        MEDIAN,
+        BYZANTINE_FAULT_TOLERANCE
+    }
+
+    // Current active strategy
+    private TimeCalculationStrategy currentStrategy;
+    private StrategyType currentStrategyType;
+
+    // Available strategy instances
+    private final Map<StrategyType, TimeCalculationStrategy> strategies = new EnumMap<>(StrategyType.class);
+
     public VotingService(TcpServerService tcpServer) {
         this.tcpServer = tcpServer;
+
+        strategies.put(StrategyType.WEIGHTED_AVERAGE, new TimeCalculationStrategy.WeightedAverageStrategy());
+        strategies.put(StrategyType.MEDIAN, new TimeCalculationStrategy.MedianStrategy());
+        strategies.put(StrategyType.BYZANTINE_FAULT_TOLERANCE, new TimeCalculationStrategy.ByzantineFaultToleranceStrategy());
+
+        // Set default strategy
+        setStrategy(StrategyType.WEIGHTED_AVERAGE);
+
         initializeWeights();
+    }
+
+    /**
+     * Change the calculation strategy at runtime
+     */
+    public void setStrategy(StrategyType strategyType) {
+        this.currentStrategyType = strategyType;
+        this.currentStrategy = strategies.get(strategyType);
+        System.out.println("[Voting] Strategy changed to: " + currentStrategy.getName());
+    }
+
+    /**
+     * Get current strategy type
+     */
+    public StrategyType getCurrentStrategyType() {
+        return currentStrategyType;
+    }
+
+    /**
+     * Get current strategy name
+     */
+    public String getCurrentStrategyName() {
+        return currentStrategy.getName();
+    }
+
+    /**
+     * Get current strategy description
+     */
+    public String getCurrentStrategyDescription() {
+        return currentStrategy.getDescription();
+    }
+
+    /**
+     * Get all available strategies
+     */
+    public Map<StrategyType, TimeCalculationStrategy> getAllStrategies() {
+        return new EnumMap<>(strategies);
     }
 
     /**
@@ -61,7 +123,7 @@ public class VotingService {
     }
 
     /**
-     * Scheduled task: Poll all satellites for time and calculate weighted average.
+     * Scheduled task: Poll all satellites for time and calculate using current strategy.
      * Runs every 3 seconds with metrics collection and auto-ban mechanism.
      */
     @Scheduled(fixedRate = 3000, initialDelay = 1000)
@@ -126,7 +188,8 @@ public class VotingService {
                 return;
             }
 
-            calculatedSystemTime = calculateWeightedAverage(responses);
+            // Use current strategy to calculate time
+            calculatedSystemTime = currentStrategy.calculateTime(responses, satelliteWeights);
             lastCalculationTime = System.currentTimeMillis();
 
             long deviation = calculatedSystemTime - lastCalculationTime;
@@ -139,8 +202,8 @@ public class VotingService {
                     deviation
             ));
 
-            System.out.printf("[Voting] Round: %d | System Time: %d | Deviation: %+d ms | Active: %d/8 | Network Errors: %d%n",
-                    totalVotingRounds.get(), calculatedSystemTime, deviation,
+            System.out.printf("[Voting] Round: %d | Strategy: %s | System Time: %d | Deviation: %+d ms | Active: %d/8 | Network Errors: %d%n",
+                    totalVotingRounds.get(), currentStrategy.getName(), calculatedSystemTime, deviation,
                     activeResponseCount, totalNetworkErrors.get());
 
         } catch (Exception e) {
@@ -183,41 +246,6 @@ public class VotingService {
             }
             data.setConnected(false);
         }
-    }
-
-    /**
-     * Calculate weighted average time from satellite responses
-     */
-    private long calculateWeightedAverage(List<Response> responses) {
-        if (responses.isEmpty()) {
-            return System.currentTimeMillis();
-        }
-
-        List<Response> validResponses = responses.stream()
-                .filter(r -> r.getStatus() == ResponseStatus.OK)
-                .collect(Collectors.toList());
-
-        if (validResponses.isEmpty()) {
-            return System.currentTimeMillis();
-        }
-
-        double totalWeight = 0.0;
-        double weightedSum = 0.0;
-
-        for (Response response : validResponses) {
-            double weight = satelliteWeights.getOrDefault(response.getId(), 1.0);
-            weightedSum += response.getTimestamp() * weight;
-            totalWeight += weight;
-        }
-
-        if (totalWeight == 0) {
-            return (long) validResponses.stream()
-                    .mapToLong(Response::getTimestamp)
-                    .average()
-                    .orElse(System.currentTimeMillis());
-        }
-
-        return Math.round(weightedSum / totalWeight);
     }
 
     public int getTotalVotingRounds() {
@@ -318,7 +346,6 @@ public class VotingService {
      */
     public CompletableFuture<Response> resetSatelliteErrors(int satelliteId) {
         errorCounters.put(satelliteId, 0);
-
         satelliteWeights.put(satelliteId, 1.0);
 
         Request request = new Request(RequestType.RESET_ERRORS, null);
