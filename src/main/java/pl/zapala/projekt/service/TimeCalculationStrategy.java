@@ -115,15 +115,16 @@ public interface TimeCalculationStrategy {
     }
 
     /**
-     * Byzantine Fault Tolerance Strategy - removes outliers and averages the rest.
-     * Discards satellites with times deviating significantly from the mean.
+     * Byzantine Fault Tolerance Strategy - removes outliers and medians the rest.
+     * Discards satellites with times deviating significantly from the median.
      */
     class ByzantineFaultToleranceStrategy implements TimeCalculationStrategy {
 
-        private static final double SIGMA_THRESHOLD = 2.0; // Remove values beyond 2σ
+        private static final double SIGMA_THRESHOLD = 2.0;
 
         @Override
         public long calculateTime(List<Response> responses, Map<Integer, Double> weights) {
+
             if (responses.isEmpty()) {
                 return System.currentTimeMillis();
             }
@@ -131,48 +132,46 @@ public interface TimeCalculationStrategy {
             List<Long> times = responses.stream()
                     .filter(r -> r.getStatus() == ResponseStatus.OK)
                     .map(Response::getTimestamp)
+                    .sorted()
                     .collect(Collectors.toList());
 
             if (times.isEmpty()) {
                 return System.currentTimeMillis();
             }
 
-            // If only 1-2 satellites, no filtering possible
             if (times.size() <= 2) {
-                return (long) times.stream()
+                return times.stream()
                         .mapToLong(Long::longValue)
-                        .average()
-                        .orElse(System.currentTimeMillis());
+                        .sum() / times.size();
             }
 
-            // Step 1: Calculate mean
-            double mean = times.stream()
-                    .mapToLong(Long::longValue)
+            double median = calculateMedian(times);
+
+            double variance = times.stream()
+                    .mapToDouble(t -> Math.pow(t - median, 2))
                     .average()
                     .orElse(0);
 
-            // Step 2: Calculate standard deviation
-            double variance = times.stream()
-                    .mapToDouble(t -> Math.pow(t - mean, 2))
-                    .average()
-                    .orElse(0);
             double stdDev = Math.sqrt(variance);
 
-            // Step 3: Filter outliers (keep values within SIGMA_THRESHOLD * σ)
             List<Long> filteredTimes = times.stream()
-                    .filter(t -> Math.abs(t - mean) <= SIGMA_THRESHOLD * stdDev)
+                    .filter(t -> Math.abs(t - median) <= SIGMA_THRESHOLD * stdDev)
                     .collect(Collectors.toList());
 
-            // If all values filtered out, use original times
             if (filteredTimes.isEmpty()) {
                 filteredTimes = times;
             }
 
-            // Step 4: Calculate final average
-            return (long) filteredTimes.stream()
-                    .mapToLong(Long::longValue)
-                    .average()
-                    .orElse(System.currentTimeMillis());
+            return (long) calculateMedian(filteredTimes);
+        }
+
+        private double calculateMedian(List<Long> values) {
+            int size = values.size();
+            if (size % 2 == 0) {
+                return (values.get(size / 2 - 1) + values.get(size / 2)) / 2.0;
+            } else {
+                return values.get(size / 2);
+            }
         }
 
         @Override
@@ -182,7 +181,7 @@ public interface TimeCalculationStrategy {
 
         @Override
         public String getDescription() {
-            return "Odrzuca wartości odstające (>2σ) i uśrednia pozostałe. Wysoka odporność na awarie bizantyjskie.";
+            return "Używa mediany i odrzuca wartości odstające (>2σ). Bardzo wysoka odporność na awarie bizantyjskie.";
         }
     }
 }
